@@ -28,4 +28,4 @@ func main() {
 
 ## Thanks
 
-This library uses [github.com/mohae/deepcopy](github.com/mohae/deepcopy) to copy arbitrary fields.
+This library uses [github.com/mohae/deepcopy](https://github.com/mohae/deepcopy) to copy arbitrary fields.
