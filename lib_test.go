@@ -8,6 +8,18 @@ import (
 	"testing"
 )
 
+type traceInTest struct {
+	t *testing.T
+}
+
+func (t traceInTest) Println(args ...interface{}) {
+	t.t.Log(args...)
+}
+
+func (t traceInTest) PrintfLn(format string, args ...interface{}) {
+	t.t.Logf(format+"\n", args...)
+}
+
 type simpleStruct struct {
 	FieldA string
 	FieldB int
@@ -158,7 +170,7 @@ func TestStructWithFieldsInSlice(t *testing.T) {
 	dupReplica := 2
 	dupSrc.Replicas = &dupReplica
 
-	assert.Assert(t, deepcopy.OnChange(&dupSrc, &src, "Replicas"))
+	assert.Assert(t, deepcopy.OnChangeD(traceInTest{t:t}, &dupSrc, &src, "Replicas"))
 }
 
 func TestStructWithSliceInSlice(t *testing.T) {
@@ -236,8 +248,6 @@ func TestStructWithSliceInSlice(t *testing.T) {
 		t.Fail()
 	}
 
-	t.Logf("%#v", dst)
-
 	assert.Assert(t, dst.ObjectMeta.Name == src.ObjectMeta.Name)
 	assert.Assert(t, len(dst.ObjectMeta.Labels) == len(src.ObjectMeta.Labels))
 	assert.Assert(t, dst.Spec.SecurityContext.RunAsNonRoot != src.Spec.SecurityContext.RunAsNonRoot)
@@ -253,4 +263,10 @@ func TestStructWithSliceInSlice(t *testing.T) {
 			assert.Assert(t, dst.Spec.InitContainers[i].Ports[p].HostIP != src.Spec.InitContainers[i].Ports[p].HostIP)
 		}
 	}
+
+	assert.Assert(t, !deepcopy.OnChangeD(traceInTest{t}, &dst, &src, "ObjectMeta.Name",
+		"ObjectMeta.Labels",
+		"Spec.SecurityContext.RunAsNonRoot",
+		"Spec.InitContainers.Ports.Name",
+		"Spec.InitContainers.Ports.HostPort"))
 }

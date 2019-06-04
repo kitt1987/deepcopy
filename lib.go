@@ -11,8 +11,15 @@ func Partial(dst, src interface{}, fieldsSelected ...string) (copied bool) {
 }
 
 func OnChange(dst, src interface{}, fieldsSelected ...string) (copied bool) {
+	return OnChangeD(&traceNothing{}, dst, src, fieldsSelected...)
+}
+
+func OnChangeD(tracer Tracer, dst, src interface{}, fieldsSelected ...string) (copied bool) {
 	hierarchy := fieldsToTree(fieldsSelected)
-	_, copied = copyPieceChanges(reflect.ValueOf(dst), reflect.ValueOf(src), &hierarchy)
+	_, copied = copyPieceChanges(reflect.ValueOf(dst), reflect.ValueOf(src), &hierarchy, &stackTracer{
+		HierarchyStack: HierarchyStack(""),
+		Tracer:         tracer,
+	})
 	return copied
 }
 
@@ -33,6 +40,15 @@ func (t *tree) AddBranch(branchValue string) (branch *tree) {
 	b := newTree(t.layer + 1)
 	t.branches[branchValue] = b
 	return &b
+}
+
+func (t tree) Trace(tr *stackTracer) {
+	brs := ""
+	for br := range t.branches {
+		brs += "\n            +--" + tr.Prefix() + "." + br
+	}
+
+	tr.Println(brs)
 }
 
 func newTree(layerId int) tree {
@@ -122,10 +138,15 @@ func inspectObject(in reflect.Value, hierarchy *tree) (mimic reflect.Value, copi
 	return
 }
 
-func copyPieceChanges(dst, src reflect.Value, hierarchy *tree) (mimic reflect.Value, copied bool) {
+func copyPieceChanges(dst, src reflect.Value, hierarchy *tree, tr *stackTracer) (mimic reflect.Value, copied bool) {
 	if src.Kind() != reflect.Ptr && src.Kind() != reflect.Slice && src.Kind() != reflect.Struct {
 		panic(fmt.Sprintf("the object should be a pointer, structure or slice but %s", src.Kind()))
 	}
+
+	hierarchy.Trace(tr)
+	defer tr.Pop()
+	tr.PrintfLn("Source: %#v", src)
+	tr.PrintfLn("Destination: %#v", dst)
 
 	if dst.IsValid() {
 		mimic = dst
@@ -147,21 +168,27 @@ func copyPieceChanges(dst, src reflect.Value, hierarchy *tree) (mimic reflect.Va
 	if src.Kind() == reflect.Slice {
 		slice := reflect.Zero(src.Type())
 		for j := 0; j < src.Len(); j++ {
-			var elem reflect.Value
-			elem, copied = copyPieceChanges(out.Index(j), src.Index(j), hierarchy)
+			tr.PrintfLn("Source field【%s】is a %s! Go through the %dth element!", tr.Prefix(),
+				reflect.Slice.String(), j)
+			elem, elemCopied := copyPieceChanges(out.Index(j), src.Index(j), hierarchy, tr)
 			if elem.IsValid() {
 				slice = reflect.Append(slice, elem)
 			}
+			copied = copied || elemCopied
 		}
 		return
 	}
 
 	for value, branch := range hierarchy.branches {
+		tr.PrintfLn("=======================Detect branch【%s.%s】======================", tr.Prefix(), value)
 		nextIn := src.FieldByName(value)
 		nextOut := out.FieldByName(value)
+		var elemCopied bool
 
 		if len(branch.branches) == 0 {
 			if !nextIn.IsValid() {
+				tr.PrintfLn("Can't found field %s.%s in Source. Skip!", tr.Prefix(), value)
+				tr.PrintfLn("========================End branch【%s.%s】========================", tr.Prefix(), value)
 				continue
 			}
 
@@ -169,17 +196,26 @@ func copyPieceChanges(dst, src reflect.Value, hierarchy *tree) (mimic reflect.Va
 			case reflect.Map,
 				reflect.Struct,
 				reflect.Slice:
-				copied = !reflect.DeepEqual(nextIn.Interface(), nextOut.Interface())
+				elemCopied = !reflect.DeepEqual(nextIn.Interface(), nextOut.Interface())
 			default:
-				copied = nextIn.Interface() != nextOut.Interface()
+				elemCopied = nextIn.Interface() != nextOut.Interface()
 			}
 
-			if copied {
+			tr.PrintfLn("Source: %#v", nextIn.Interface())
+			tr.PrintfLn("Destination: %#v", nextOut.Interface())
+			tr.PrintfLn("Source field【%s.%s】is a %s! Copied? %t", tr.Prefix(), value, nextIn.Kind().String(), copied)
+			if elemCopied {
 				copyRecursive(nextIn, nextOut)
 			}
 		} else {
-			_, copied = copyPieceChanges(nextOut, nextIn, &branch)
+			tr.PrintfLn("Source field【%s.%s】has branches. Go through!", tr.Prefix(), value)
+			tr.Push(value)
+			_, elemCopied = copyPieceChanges(nextOut, nextIn, &branch, tr)
+			tr.PrintfLn("Source field【%s.%s】Copied? %t", tr.Prefix(), value, copied)
 		}
+
+		copied = copied || elemCopied
+		tr.PrintfLn("========================End branch【%s.%s】========================", tr.Prefix(), value)
 	}
 
 	return
